@@ -14,8 +14,8 @@ kernel), compute the actual hexadecimal address, and search for it in
 the dump.
 
 You can run "objdump -drl foo.o" yourself and save the results in a
-text file with the initial line "-*- objdump -*-"; in that case, the
-"s" binding above will work, but "g" won't.
+text file with the initial line specifying "objdump" mode; in that
+case, the "s" binding above will work, but "g" won't.
 
 Oh, and if you run M-x objdump, it'll prompt for a file name, but will
 override completion-ignored-extensions so you can complete on .o files
