@@ -58,6 +58,7 @@
 ;; work somehow?
 ;;
 ;; There should be other code to call out to for hex/bignum processing.
+(require 'gdb-mi)                       ;gdb-disassembly-mode font-locking
 
 (defvar objdump-file-name nil
   "Name of object file currently being examined with objdump-mode, if any.")
@@ -69,7 +70,10 @@
 ;;;###autoload
 (define-derived-mode objdump-mode text-mode "Objdump"
   "Major mode for viewing object file disassembly."
-  (setq buffer-read-only t))
+  ;; (setq buffer-read-only t)
+  (view-mode)
+  (setq-local imenu-generic-expression '((nil "^[0-9]+ <\\([^>]+\\)>:" 1)))
+  (setq-local font-lock-defaults '(gdb-disassembly-font-lock-keywords)))
 
 ;; Helpers
 
@@ -105,8 +109,10 @@
 	      (intern (match-string 1) objdump-symbol-table))))
 	objdump-symbol-table)))
 
+;; remove nils from addresses to read
 (defun objdump--read-address (prompt)
-  (completing-read prompt (objdump--get-symbols) nil))
+  (completing-read
+   prompt (objdump--get-symbols) (lambda (x) (not (null x)))))
 
 ;; Read an address and find it in the disassembly.
 ;;
