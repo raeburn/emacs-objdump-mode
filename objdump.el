@@ -67,13 +67,46 @@
   "...")
 (make-variable-buffer-local 'objdump-symbol-table)
 
+;;; TODO:
+;; - toggle immediates b/w formats
+;; - font-lock: immediates, instructions (asm-mode)
+;; - tab / backtab between functions
+;; - collapse sections, collapse functions
+;; - imenu hide functions under sections
+;; - jump to source files:lines (compilation)
+
+(defvar objdump-mode-font-lock-keywords
+  '(;; <__function.name+n>
+    ("<\\(\\(\\sw\\|[_.0-9]\\)+\\)\\([@a-z]+\\)?\\([+-][a-z0-9]+\\)?>"
+     (1 font-lock-function-name-face))
+    ;; 0xNNNNNNNN <__function.name+n>: opcode
+    ("^0x[0-9a-f]+ \\(<\\(\\(\\sw\\|[_.]\\)+\\)\\+[0-9]+>\\)?:[ \t]+\\(\\sw+\\)"
+     (4 font-lock-keyword-face))
+    ;; %register(at least i386)
+    ("%\\sw+" . font-lock-variable-name-face)
+    ;; sections
+    ("\\(Disassembly of section\\) \\(.+\\):"
+     (1 font-lock-comment-face)
+     (2 font-lock-constant-face))
+    ;; assembler commands
+    ("\\(\\s-+[[:xdigit:]]\\{2\\}\\s-+\t\\)\\([a-z]+\\)" .
+     (2 font-lock-builtin-face)))
+  "Font lock keywords used in `gdb-disassembly-mode'.")
+
 ;;;###autoload
 (define-derived-mode objdump-mode text-mode "Objdump"
   "Major mode for viewing object file disassembly."
-  ;; (setq buffer-read-only t)
-  (view-mode)
+  (setq buffer-read-only t)
+  ;; (view-mode)
   (setq-local imenu-generic-expression '((nil "^[0-9]+ <\\([^>]+\\)>:" 1)))
-  (setq-local font-lock-defaults '(gdb-disassembly-font-lock-keywords)))
+  (setq-local font-lock-defaults '(objdump-mode-font-lock-keywords))
+  (modify-syntax-entry ?_ "w" objdump-mode-syntax-table)
+  ;; Use compilation mode to jump to file locations?
+  ;; (compilation-minor-mode)
+  ;; (make-local-variable 'compilation-error-regexp-alist-alist)
+  ;; (setq compilation-error-regexp-alist-alist
+  ;;       '((objdump "^\\(/[^:]+\\):\\([0-9]+\\)" 1 2)))
+  )
 
 ;; Helpers
 
@@ -129,6 +162,7 @@
 EXPR is either a \"symbolname+0x123\" style sum, as displayed in
 a Linux kernel stack trace or, just \"symbolname\"."
   (interactive (list (objdump--read-address "Address to find: ")))
+  (push-mark)
   (save-match-data
     (cond ((string-match "^\\([a-zA-Z0-9_.]+\\)\\+0x\\([0-9a-fA-F]+\\)$" expr)
 	   (let* ((symbol-string (match-string 1 expr))
@@ -166,6 +200,7 @@ a Linux kernel stack trace or, just \"symbolname\"."
 			    (match-beginning 0)
 			  (error "Symbol %s not found" expr)))))
 	  (t
+           (pop-mark)
 	   (error "Couldn't parse %S" expr)))))
 
 ;; FIXME: If there's no objdump-file-name but the buffer has a real
