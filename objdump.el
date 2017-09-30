@@ -58,8 +58,6 @@
 ;; work somehow?
 ;;
 ;; There should be other code to call out to for hex/bignum processing.
-(require 'gdb-mi)                       ;gdb-disassembly-mode font-locking
-
 (defvar objdump-file-name nil
   "Name of object file currently being examined with objdump-mode, if any.")
 (make-variable-buffer-local 'objdump-file-name)
@@ -68,13 +66,17 @@
 (make-variable-buffer-local 'objdump-symbol-table)
 
 ;;; TODO:
-;; - toggle immediates b/w formats
+;; - toggle immediates b/w formats (macroexpand)
 ;; - font-lock: immediates, instructions (asm-mode)
-;; - tab / backtab between functions
-;; - collapse sections, collapse functions
-;; - imenu hide functions under sections
-;; - jump to source files:lines (compilation)
+;; - tab / backtab between functions (compilation next/previous error)
+;; - collapse sections, collapse functions (hs)
+;; - imenu hide functions under sections (imenu with headings)
+;; - jump to source files:lines (compilation-regexp-alist, compilation-minor-mode)
 
+;; -------------------------------------------------------------------
+;;; Font-Lock
+
+;; modified from gdb-mi gdb-disassembly mode
 (defvar objdump-mode-font-lock-keywords
   '(;; <__function.name+n>
     ("<\\(\\(\\sw\\|[_.0-9]\\)+\\)\\([@a-z]+\\)?\\([+-][a-z0-9]+\\)?>"
@@ -93,6 +95,16 @@
      (2 font-lock-builtin-face)))
   "Font lock keywords used in `gdb-disassembly-mode'.")
 
+;; -------------------------------------------------------------------
+;;; Mode
+
+(defvar objdump-mode-map
+  (let ((km (make-sparse-keymap)))
+    (define-key km "s"           'objdump-find-address)
+    (define-key km "g"           'objdump-revert)
+    (define-key km (kbd "C-M-?") 'objdump-show-decimal)
+    km))
+
 ;;;###autoload
 (define-derived-mode objdump-mode text-mode "Objdump"
   "Major mode for viewing object file disassembly."
@@ -108,7 +120,8 @@
   ;;       '((objdump "^\\(/[^:]+\\):\\([0-9]+\\)" 1 2)))
   )
 
-;; Helpers
+;; -------------------------------------------------------------------
+;;; Helpers
 
 ;; XXX For handling 64-bit objects in a 32-bit Emacs, this should
 ;; probably generate a list of numbers using only 16 or 24 bits in
@@ -146,6 +159,23 @@
 (defun objdump--read-address (prompt)
   (completing-read
    prompt (objdump--get-symbols) (lambda (x) (not (null x)))))
+
+;; -------------------------------------------------------------------
+;;; Commands
+
+(eval-when-compile
+  (require 'nvp-macro))
+
+;; show decimal value of hex at point in pos-tip popup
+;; FIXME: should just macroexpand numbers in place
+(defun objdump-show-decimal (symbol)
+  (interactive (list (thing-at-point 'symbol)))
+  (and (string-match "$?0x" symbol)
+       (nvp-with-toggled-tip
+         (number-to-string
+          (string-to-number (substring symbol (match-end 0)) 16))
+         :help-fn nil
+         :bindings nil)))
 
 ;; Read an address and find it in the disassembly.
 ;;
@@ -213,9 +243,6 @@ a Linux kernel stack trace or, just \"symbolname\"."
   ;; XXX hack
   ;; Should retain position if possible, a la revert-file.
   (objdump objdump-file-name))
-
-(define-key objdump-mode-map "s" 'objdump-find-address)
-(define-key objdump-mode-map "g" 'objdump-revert)
 
 ;; Normally completion-ignored-extensions will rule out some of the
 ;; very files we want to be looking for in this case.
