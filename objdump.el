@@ -102,7 +102,6 @@
   (let ((km (make-sparse-keymap)))
     (define-key km "s"           'objdump-find-address)
     (define-key km "g"           'objdump-revert)
-    (define-key km (kbd "C-M-?") 'objdump-show-decimal)
     km))
 
 ;;;###autoload
@@ -162,20 +161,6 @@
 
 ;; -------------------------------------------------------------------
 ;;; Commands
-
-(eval-when-compile
-  (require 'nvp-macro))
-
-;; show decimal value of hex at point in pos-tip popup
-;; FIXME: should just macroexpand numbers in place
-(defun objdump-show-decimal (symbol)
-  (interactive (list (thing-at-point 'symbol)))
-  (and (string-match "$?0x" symbol)
-       (nvp-with-toggled-tip
-         (number-to-string
-          (string-to-number (substring symbol (match-end 0)) 16))
-         :help-fn nil
-         :bindings nil)))
 
 ;; Read an address and find it in the disassembly.
 ;;
