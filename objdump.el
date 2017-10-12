@@ -253,7 +253,8 @@ a Linux kernel stack trace or, just \"symbolname\"."
 ;;;###autoload
 (defun objdump (filename)
   "Run objdump to disassemble an object file, and invoke objdump-mode."
-  (interactive (let ((completion-ignored-extensions (get-completion-ignored-extensions-for-objects)))
+  (interactive (let ((completion-ignored-extensions
+                      (get-completion-ignored-extensions-for-objects)))
 		 (list (read-file-name "Object file to disassemble: "
 				       nil nil t))))
   (let ((output-buffer (get-buffer-create (concat "*Objdump " filename "*")))
@@ -266,8 +267,7 @@ a Linux kernel stack trace or, just \"symbolname\"."
     (with-current-buffer output-buffer
       (objdump-mode)
       (setq objdump-file-name filename))
-    (message "Running %s ... done" command)
-    ))
+    (message "Running %s ... done" command)))
 
 ;; No! This doesn't do disassembly; it assumes it's already a disassembly.
 ;;
