@@ -66,6 +66,10 @@
   "...")
 (make-variable-buffer-local 'objdump-symbol-table)
 
+(defcustom objdump-command "objdump"
+  "Command to run to disassemble object file"
+  :group 'objdump)
+
 ;;;###autoload
 (define-derived-mode objdump-mode text-mode "Objdump"
   "Major mode for viewing object file disassembly."
@@ -204,7 +208,7 @@ a Linux kernel stack trace or, just \"symbolname\"."
 		 (list (read-file-name "Object file to disassemble: "
 				       nil nil t))))
   (let ((output-buffer (get-buffer-create (concat "*Objdump " filename "*")))
-	(command (concat "objdump -drl " filename)))
+	(command (concat objdump-command " -dCSlr " filename)))
     (with-current-buffer output-buffer
       (setq buffer-read-only nil)
       (erase-buffer))
