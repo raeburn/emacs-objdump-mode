@@ -58,17 +58,21 @@ time), the allocation-time stack recorded may not be reported until
 after you've unloaded it and removed some symbol table entries. This
 code lets you fetch the symbol table while it's loaded, and fix up the
 stack trace generated later.
+dliksjkljsdkldjsk
 
 It's not polished, and there are no interactive commands in this file.
 * Possible enhancements [4/22]
+ - [ ] Button  to run each function 
  - [ ] more search input formats (see below at objdump-find-address)
  - [ ] hide/show function/file/line info
    - [ ] maybe shorten filename to basename only
- - [ ] fold function with <tab>
+ - [ ] fold functions with <tab>
+ - [ ] Auto revert mode IMPORTANT
+ - [X] dired integration with o and RET key
  - [X] marginaia annotations
  - [X] imenu integration
  - [X] pretty colors^W^Wfont-lock support?
- - [X] make objdump-revert retain current position TODO
+ - [X] make objdump-revert retain current position
  - [ ] click/RET on symbol name in reference to jump to definition
  - [ ] click/RET to get source file if available
 

@@ -1,6 +1,8 @@
 ;;; objdump.el --- Disassemble and browse code -*- lexical-binding: t -*-
 
-;; Author: raeburn
+;; Author: Laluxx
+
+;;; Commentary:
 
 ;; Keywords: tools
 
@@ -8,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'hexl)
+(require 'marginalia)
 
 ;;; Faces
 
@@ -52,7 +55,7 @@
 (make-variable-buffer-local 'objdump-file-name)
 
 (defvar objdump-binary-buffer nil
-  "Buffer containing the binary file in hexl-mode.")
+  "Buffer containing the binary file in 'hexl-mode'.")
 (make-variable-buffer-local 'objdump-binary-buffer)
 
 (defvar objdump-symbol-table nil
@@ -60,13 +63,37 @@
 (make-variable-buffer-local 'objdump-symbol-table)
 
 (defcustom objdump-command "objdump"
-  "Command to run to disassemble object file"
+  "Command to run to disassemble object file."
   :type 'string
   :group 'objdump)
+
+;;; Dired integration
+
+(require 'dired-aux)
+(defun dired-find-file-other-window-or-objdump ()
+  "In Dired, open file in other window or show objdump for executables."
+  (interactive)
+  (let ((file (dired-get-filename)))
+    (if (and (file-executable-p file)
+             (not (file-directory-p file)))
+        (objdump file)
+      (dired-find-file-other-window))))
+
+(defun dired-find-file-or-objdump ()
+  "In Dired, open file or show objdump for executables."
+  (interactive)
+  (let ((file (dired-get-filename)))
+    (if (and (file-executable-p file)
+             (not (file-directory-p file)))
+        (progn
+          (objdump file)
+          (delete-window))  ; Delete the extra window after opening objdump
+      (dired-find-file))))
 
 (defvar objdump-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map "s" 'imenu)
+    (define-key map "a" 'objdump-goto-address)
     (define-key map "i" 'imenu)
     (define-key map "g" 'objdump-revert)
     (define-key map "p" 'objdump-previous-function)
@@ -79,8 +106,68 @@
     (define-key map (kbd "C-a") 'objdump-move-beginning-of-line)
     (define-key map (kbd "C-e") 'objdump-move-end-of-line)
     (define-key map (kbd "RET") 'objdump-visit-address-in-hexl)
+    (define-key map (kbd "C-j") 'objdump-visit-address-in-hexl)
+    (define-key dired-mode-map (kbd "o") 'dired-find-file-other-window-or-objdump)
+    (define-key dired-mode-map (kbd "RET") 'dired-find-file-or-objdump)
     map)
   "Keymap for `objdump-mode'.")
+
+(defun objdump-beginning-of-defun (&optional arg)
+  "Move backward to the beginning of a function.
+With ARG, do it that many times.  Negative arg -N means move forward to
+Nth following beginning of function."
+  (interactive "^p")
+  (unless arg (setq arg 1))
+  (let ((found t)
+        (pos (point)))
+    (if (< arg 0)
+        ;; Moving forward
+        (dotimes (_ (- arg) found)
+          (end-of-line)
+          (when (re-search-forward "^[0-9a-f]+ <[^>]+>:$" nil t)
+            (beginning-of-line))
+          (setq found (not (= pos (point)))))
+      ;; Moving backward
+      (dotimes (_ arg found)
+        (unless (looking-at "^[0-9a-f]+ <[^>]+>:$")
+          (end-of-line)
+          (re-search-backward "^[0-9a-f]+ <[^>]+>:$" nil t))
+        (setq found (not (= pos (point))))))
+    found))
+
+(defun objdump-end-of-defun (&optional arg)
+  "Move forward to next end of function.
+With ARG, do it that many times.  Negative argument -N means move
+back to Nth preceding end of function."
+  (interactive "^p")
+  (unless arg (setq arg 1))
+  (let ((start-pos (point))
+        (found t))
+    ;; If we're not looking at the start of a function, move to one
+    (unless (looking-at "^[0-9a-f]+ <[^>]+>:$")
+      (objdump-beginning-of-defun 1))
+    
+    ;; Now find the end
+    (forward-line 1)
+    (while (and (not (eobp))
+                (not (looking-at "^[0-9a-f]+ <[^>]+>:$"))  ; next function
+                (not (looking-at "^\\s-*$"))               ; blank line
+                (not (looking-at "^Disassembly of")))      ; section header
+      (forward-line 1))
+    
+    (setq found (not (= start-pos (point))))
+    
+    ;; If arg > 1, do it again
+    (when (and found (> arg 1))
+      (setq found (objdump-end-of-defun (1- arg))))
+    found))
+
+(defun objdump-mode-setup-defun ()
+  "Set up function navigation for objdump-mode."
+  (setq-local beginning-of-defun-function #'objdump-beginning-of-defun)
+  (setq-local end-of-defun-function #'objdump-end-of-defun))
+
+(add-hook 'objdump-mode-hook #'objdump-mode-setup-defun)
 
 
 (defun objdump-get-address-at-point ()
@@ -92,7 +179,7 @@ Returns nil if no address is found."
       (string-to-number (match-string 1) 16))))
 
 (defun objdump-ensure-hexl-buffer ()
-  "Ensure we have a hexl-mode buffer for the binary file.
+  "Ensure we have a 'hexl-mode' buffer for the binary file.
 Returns the buffer or nil if the binary file cannot be found."
   (unless (and objdump-binary-buffer
                (buffer-live-p objdump-binary-buffer))
@@ -104,6 +191,9 @@ Returns the buffer or nil if the binary file cannot be found."
             (hexl-mode))
           (setq objdump-binary-buffer buf)))))
   objdump-binary-buffer)
+
+(defvar-local objdump-hexl-window-shrunk nil
+  "Flag indicating whether the hexl window has been shrunk.")
 
 (defun objdump-get-byte-offset-in-line ()
   "Get the byte offset from the start of the line based on point position.
@@ -128,7 +218,7 @@ Returns nil if not on a hex byte."
   "Flag indicating whether the hexl window has been shrunk.")
 
 (defun objdump-visit-address-in-hexl ()
-  "Visit the address from current objdump line in a hexl-mode buffer."
+  "Visit the address from current objdump line in a 'hexl-mode' buffer."
   (interactive)
   (let ((addr (objdump-get-address-at-point))
         (hexl-buf-name (file-name-nondirectory objdump-file-name)))
@@ -147,24 +237,6 @@ Returns nil if not on a hex byte."
       (shrink-window-horizontally 27)
       (setq objdump-hexl-window-shrunk t))
     (hexl-goto-address addr)))
-
-;; (defun objdump-visit-address-in-hexl ()
-;;   "Visit the address from current objdump line in a hexl-mode buffer."
-;;   (interactive)
-;;   (let ((addr (objdump-get-address-at-point))
-;;         (hexl-buf-name (file-name-nondirectory objdump-file-name)))
-;;     (unless addr
-;;       (user-error "No valid address found on current line"))
-;;     (unless objdump-file-name
-;;       (user-error "No binary file path stored"))
-;;     (unless (file-exists-p objdump-file-name)
-;;       (user-error "Binary file %s not found" objdump-file-name))
-    
-;;     ;; Find or create the buffer
-;;     (find-file-other-window objdump-file-name)
-;;     (unless (eq major-mode 'hexl-mode)
-;;       (hexl-mode))
-;;     (hexl-goto-address addr)))
 
 (defvar objdump-extensions
   '(".o"                                ; compiled object file
@@ -238,6 +310,120 @@ Returns nil if not on a hex byte."
 
 ;;; Interactive commands
 
+;;; ADDRESS
+
+(defun objdump--collect-addresses ()
+  "Collect all addresses from the current objdump buffer.
+Returns an alist of (address . properties) pairs."
+  (let ((addresses '())
+        (max-addr-len 0))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\s-*\\([0-9a-f]+\\):\\s-+\\([0-9a-f ]+\\)?\\(?:\t\\(.+\\)\\)?" nil t)
+        (let* ((addr (match-string 1))
+               (hex-bytes (or (match-string 2) ""))
+               (instruction (or (match-string 3) ""))
+               (marker (point-marker)))
+          (setq max-addr-len (max max-addr-len (length addr)))
+          ;; Store address with its context
+          (push (list addr hex-bytes instruction marker) addresses))))
+    (setq-local objdump--longest-addr-length (+ 2 max-addr-len)) ; +2 for "0x" prefix
+    (nreverse addresses)))
+
+(defun objdump--format-address-candidate (addr-info)
+  "Format an address candidate for completion display.
+ADDR-INFO is (addr hex-bytes instruction marker)."
+  (let* ((addr (nth 0 addr-info))
+         (completion-text (format "0x%s" addr)))
+    ;; Store full info as text properties for marginalia
+    (propertize completion-text
+                'addr addr
+                'hex-bytes (nth 1 addr-info)
+                'instruction (nth 2 addr-info)
+                'marker (nth 3 addr-info))))
+
+(defun objdump-address-completion-annotator (cand)
+  "Annotate address CAND with instruction info for marginalia."
+  (let* ((hex-bytes (get-text-property 0 'hex-bytes cand))
+         (instruction (get-text-property 0 'instruction cand))
+         (addr-len (length cand))
+         ;; Calculate padding to align columns
+         (addr-padding (make-string 
+                        (max 0 (- objdump--longest-addr-length addr-len))
+                        ?\s)))
+    (concat
+     addr-padding
+     "  "  ; Space after address
+     (when hex-bytes
+       (concat
+        (propertize hex-bytes
+                    'face 'font-lock-comment-face)
+        "\t"))
+     (when instruction
+       ;; Apply syntax highlighting to the instruction
+       (with-temp-buffer
+         (insert instruction)
+         (delay-mode-hooks
+           (objdump-mode)
+           (font-lock-ensure)
+           (buffer-string)))))))
+
+  (defun objdump-goto-raw-address (addr)
+    "Go to an address in the objdump buffer."
+    (let* ((clean-addr (replace-regexp-in-string "^0x" "" addr))
+           (regexp (format "^\\s-*%s:" clean-addr)))
+      (save-excursion
+        (goto-char (point-min))
+        (if (re-search-forward regexp nil t)
+            (progn
+              (goto-char (match-beginning 0))
+              (set-window-point (selected-window) (point))
+              (recenter))
+          (message "Address %s not found" addr)))))
+
+  (defun objdump-goto-address-at-point ()
+    "Jump to the address referenced at point."
+    (interactive)
+    (save-excursion
+      (beginning-of-line)
+      (when (or (looking-at "^\\s-*\\([0-9a-f]+\\):")               ; Direct address
+                (looking-at ".*\\(0x[0-9a-f]+\\)"))                  ; Reference in instruction
+        (let ((addr (match-string 1)))
+          (objdump-goto-raw-address addr)))))
+
+  (defun objdump-goto-address ()
+    "Jump to any address in the objdump buffer using completion."
+    (interactive)
+    (let* ((addresses (objdump--collect-addresses))
+           (candidates (mapcar #'objdump--format-address-candidate addresses)))
+      ;; Register the annotator for this completion session
+      (add-hook 'marginalia-annotator-registry
+                (list 'objdump-address-completion
+                      'objdump-address-completion-annotator
+                      'marginalia-annotate-binding))
+      (unwind-protect
+          (let* ((completion-category-defaults
+                  '((objdump-address-completion
+                     (styles basic partial-completion))))
+                 (completion-category-overrides
+                  '((objdump-address-completion
+                     (styles basic partial-completion))))
+                 (completion (completing-read "Go to address: "
+                                              (lambda (str pred action)
+                                                (if (eq action 'metadata)
+                                                    '(metadata
+                                                      (category . objdump-address-completion))
+                                                  (complete-with-action
+                                                   action candidates str pred))))))
+            (when-let ((marker (get-text-property 0 'marker completion)))
+              (goto-char marker)
+              (recenter)))
+        ;; Clean up the annotator
+        (setq marginalia-annotator-registry
+              (assq-delete-all 'objdump-address-completion
+                               marginalia-annotator-registry)))))
+
+  
 (defun objdump-revert ()
   "Rerun objdump on the (presumably changed) object file."
   (interactive)
@@ -275,107 +461,11 @@ Returns nil if not on a hex byte."
   (let ((old-point (point)))
     (beginning-of-line)
     (if (re-search-backward "^[0-9a-f]+ <[^>]+>:$" nil t)
-        (progn 
+        (progn
           (goto-char (line-beginning-position))
           (recenter))
       (goto-char old-point)
       (message "No previous functions"))))
-
-
-;; Imenu support
-
-(defgroup objdump-completion nil
-  "Completion settings for objdump mode."
-  :group 'objdump)
-
-(defface objdump-completion-address
-  '((t :inherit marginalia-documentation))
-  "Face for objdump addresses in completion annotations."
-  :group 'objdump-completion)
-
-(defface objdump-completion-size
-  '((t :inherit marginalia-size :weight bold))
-  "Face for function size annotations."
-  :group 'objdump-completion)
-
-(defvar-local objdump--longest-symbol-length 0
-  "Length of longest symbol name in current buffer.")
-
-(defvar-local objdump--longest-addr-length 0
-  "Length of longest address in current buffer.")
-
-(defun objdump--compute-function-size (start-addr next-addr)
-  "Compute function size from START-ADDR to NEXT-ADDR."
-  (when (and start-addr next-addr)
-    (- (string-to-number next-addr 16)
-       (string-to-number start-addr 16))))
-
-(defun objdump-imenu-create-index ()
-  "Create imenu index for objdump buffer."
-  (let ((index-alist '())
-        (max-len 0)
-        (max-addr-len 0)
-        (prev-addr nil))
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward "^\\([0-9a-f]+\\) <\\([^>]+\\)>:$" nil t)
-        (let* ((addr (match-string 1))
-               (name (match-string 2))
-               (name-len (length name))
-               (addr-len (+ 2 (length addr))) ; +2 for "0x" prefix
-               (size (when prev-addr 
-                       (objdump--compute-function-size prev-addr addr)))
-               (location (point-marker)))
-          (setq max-len (max max-len name-len)
-                max-addr-len (max max-addr-len addr-len))
-          (let ((completion-item name))
-            (put-text-property 0 (length completion-item) 
-                               'objdump-address addr completion-item)
-            (when size
-              (put-text-property 0 (length completion-item) 
-                                 'objdump-size size completion-item))
-            (push (cons completion-item location) index-alist))
-          (setq prev-addr addr))))
-    (setq objdump--longest-symbol-length (+ max-len 2)
-          objdump--longest-addr-length (+ max-addr-len 2))
-    (nreverse index-alist)))
-
-(defun objdump-completion-annotator (cand)
-  "Annotate imenu CAND with address and size info for marginalia."
-  (when-let ((addr (get-text-property 0 'objdump-address cand)))
-    (let* ((size (get-text-property 0 'objdump-size cand))
-           (addr-str (format "0x%s" addr))
-           (addr-padding (make-string 
-                          (max 0 (- objdump--longest-addr-length (length addr-str))) 
-                          ?\s)))
-      (concat
-       (make-string (max 0 (- objdump--longest-symbol-length (length cand))) ?\s)
-       (propertize addr-str 'face 'objdump-completion-address)
-       addr-padding
-       "  "  ; Two spaces after address
-       (when size
-         (propertize (format "%d" size) 
-                     'face 'objdump-completion-size))))))
-
-(with-eval-after-load 'marginalia
-  (add-to-list 'marginalia-annotator-registry
-               '(imenu objdump-completion-annotator marginalia-annotate-binding)))
-
-
-
-(defun objdump--line-has-hex-p ()
-  "Return t if current line has hex instruction bytes."
-  (save-excursion
-    (beginning-of-line)
-    (looking-at "^\\s-*[0-9a-f]+:\\s-+[0-9a-f]")))
-
-(defun objdump--get-hex-range ()
-  "Get the start and end positions of hex bytes on current line.
-Returns (start . end) positions, or nil if not on a hex line."
-  (save-excursion
-    (beginning-of-line)
-    (when (looking-at "^\\s-*[0-9a-f]+:\\s-+\\([0-9a-f ]\\{2,\\}\\)\\s-+\\S-")
-      (cons (match-beginning 1) (match-end 1)))))
 
 (defun objdump--find-nearest-hex-position (target-column)
   "Find nearest hex position to TARGET-COLUMN in current line.
@@ -520,6 +610,102 @@ Returns point position of nearest hex digit, or nil if none found."
     (while (and (> (point) (car range))
                 (not (looking-at "[0-9a-f]")))
       (backward-char))))
+
+;; Imenu support
+
+(defgroup objdump-completion nil
+  "Completion settings for objdump mode."
+  :group 'objdump)
+
+(defface objdump-completion-address
+  '((t :inherit marginalia-documentation))
+  "Face for objdump addresses in completion annotations."
+  :group 'objdump-completion)
+
+(defface objdump-completion-size
+  '((t :inherit marginalia-size :weight bold))
+  "Face for function size annotations."
+  :group 'objdump-completion)
+
+(defvar-local objdump--longest-symbol-length 0
+  "Length of longest symbol name in current buffer.")
+
+(defvar-local objdump--longest-addr-length 0
+  "Length of longest address in current buffer.")
+
+(defun objdump--compute-function-size (start-addr next-addr)
+  "Compute function size from START-ADDR to NEXT-ADDR."
+  (when (and start-addr next-addr)
+    (- (string-to-number next-addr 16)
+       (string-to-number start-addr 16))))
+
+(defun objdump-imenu-create-index ()
+  "Create imenu index for objdump buffer."
+  (let ((index-alist '())
+        (max-len 0)
+        (max-addr-len 0)
+        (prev-addr nil))
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\([0-9a-f]+\\) <\\([^>]+\\)>:$" nil t)
+        (let* ((addr (match-string 1))
+               (name (match-string 2))
+               (name-len (length name))
+               (addr-len (+ 2 (length addr))) ; +2 for "0x" prefix
+               (size (when prev-addr 
+                       (objdump--compute-function-size prev-addr addr)))
+               (location (point-marker)))
+          (setq max-len (max max-len name-len)
+                max-addr-len (max max-addr-len addr-len))
+          (let ((completion-item name))
+            (put-text-property 0 (length completion-item) 
+                               'objdump-address addr completion-item)
+            (when size
+              (put-text-property 0 (length completion-item) 
+                                 'objdump-size size completion-item))
+            (push (cons completion-item location) index-alist))
+          (setq prev-addr addr))))
+    (setq objdump--longest-symbol-length (+ max-len 2)
+          objdump--longest-addr-length (+ max-addr-len 2))
+    (nreverse index-alist)))
+
+(defun objdump-completion-annotator (cand)
+  "Annotate imenu CAND with address and size info for marginalia."
+  (when-let ((addr (get-text-property 0 'objdump-address cand)))
+    (let* ((size (get-text-property 0 'objdump-size cand))
+           (addr-str (format "0x%s" addr))
+           (addr-padding (make-string 
+                          (max 0 (- objdump--longest-addr-length (length addr-str))) 
+                          ?\s)))
+      (concat
+       (make-string (max 0 (- objdump--longest-symbol-length (length cand))) ?\s)
+       (propertize addr-str 'face 'objdump-completion-address)
+       addr-padding
+       "  "  ; Two spaces after address
+       (when size
+         (propertize (format "%d" size) 
+                     'face 'objdump-completion-size))))))
+
+(with-eval-after-load 'marginalia
+  (add-to-list 'marginalia-annotator-registry
+               '(imenu objdump-completion-annotator marginalia-annotate-binding)))
+
+
+
+(defun objdump--line-has-hex-p ()
+  "Return t if current line has hex instruction bytes."
+  (save-excursion
+    (beginning-of-line)
+    (looking-at "^\\s-*[0-9a-f]+:\\s-+[0-9a-f]")))
+
+(defun objdump--get-hex-range ()
+  "Get the start and end positions of hex bytes on current line.
+Returns (start . end) positions, or nil if not on a hex line."
+  (save-excursion
+    (beginning-of-line)
+    (when (looking-at "^\\s-*[0-9a-f]+:\\s-+\\([0-9a-f ]\\{2,\\}\\)\\s-+\\S-")
+      (cons (match-beginning 1) (match-end 1)))))
+
 
 ;; Update keymap
 
